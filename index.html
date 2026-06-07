@@ -1,0 +1,427 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+
+// ─── Palette & shared styles ───────────────────────────────────────────────
+const GAMES = ["menu", "memory", "math", "reaction", "wordscramble", "colorMatch"];
+
+const palette = {
+  bg: "#0d0d1a",
+  card: "#141428",
+  accent1: "#f7c948",
+  accent2: "#e94f7b",
+  accent3: "#4fd1c5",
+  accent4: "#a78bfa",
+  accent5: "#fb923c",
+  text: "#f0eeff",
+  muted: "#7a7a99",
+};
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: ${palette.bg}; font-family: 'Syne', sans-serif; color: ${palette.text}; }
+
+  @keyframes pop { 0%{transform:scale(1)} 50%{transform:scale(1.15)} 100%{transform:scale(1)} }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-6px)} 40%,80%{transform:translateX(6px)} }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  @keyframes flash { 0%,100%{background:transparent} 50%{background:rgba(247,201,72,0.25)} }
+
+  .pop { animation: pop 0.25s ease; }
+  .shake { animation: shake 0.4s ease; }
+  .fade-in { animation: fadeIn 0.35s ease forwards; }
+`;
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+// ─── Shared UI Components ────────────────────────────────────────────────────
+function Btn({ children, onClick, color = palette.accent1, style = {}, disabled = false }) {
+  const [anim, setAnim] = useState("");
+  return (
+    <button
+      className={anim}
+      disabled={disabled}
+      onClick={() => { setAnim("pop"); setTimeout(() => setAnim(""), 300); onClick && onClick(); }}
+      style={{
+        background: disabled ? palette.muted : color,
+        color: "#0d0d1a",
+        border: "none",
+        borderRadius: 10,
+        padding: "12px 24px",
+        fontFamily: "'Syne', sans-serif",
+        fontWeight: 700,
+        fontSize: 15,
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "filter 0.15s",
+        ...style,
+      }}
+      onMouseEnter={e => { if (!disabled) e.target.style.filter = "brightness(1.15)"; }}
+      onMouseLeave={e => { e.target.style.filter = ""; }}
+    >{children}</button>
+  );
+}
+
+function ScoreBadge({ score, label = "Score" }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(255,255,255,0.06)", borderRadius: 30, padding: "6px 16px" }}>
+      <span style={{ color: palette.muted, fontSize: 12, fontFamily: "'DM Mono',monospace" }}>{label}</span>
+      <span style={{ color: palette.accent1, fontSize: 20, fontWeight: 800, fontFamily: "'DM Mono',monospace" }}>{score}</span>
+    </div>
+  );
+}
+
+function GameShell({ title, color, score, children, onBack, rightSlot }) {
+  return (
+    <div className="fade-in" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 16px" }}>
+      <div style={{ width: "100%", maxWidth: 540, display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
+        <button onClick={onBack} style={{ background: "none", border: `1.5px solid ${palette.muted}`, borderRadius: 8, color: palette.muted, padding: "6px 14px", cursor: "pointer", fontFamily: "'Syne',sans-serif", fontSize: 13 }}>← Menu</button>
+        <span style={{ fontSize: 18, fontWeight: 800, color }}>{title}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <ScoreBadge score={score} />
+          {rightSlot}
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// GAME 1 — Memory Match
+// ══════════════════════════════════════════════════════════════
+const EMOJIS = ["🌸","🔥","⚡","🎯","🦊","🌊","🍀","💎","🚀","🎸","🐬","🌙"];
+
+function MemoryGame({ onBack }) {
+  const makeCards = () => shuffle([...EMOJIS, ...EMOJIS].slice(0, 16)).map((e, i) => ({ id: i, emoji: e, flipped: false, matched: false }));
+  const [cards, setCards] = useState(makeCards);
+  const [selected, setSelected] = useState([]);
+  const [score, setScore] = useState(0);
+  const [moves, setMoves] = useState(0);
+  const [won, setWon] = useState(false);
+  const [lock, setLock] = useState(false);
+  const [animId, setAnimId] = useState(null);
+
+  const flip = (id) => {
+    if (lock) return;
+    const card = cards.find(c => c.id === id);
+    if (card.flipped || card.matched) return;
+    const next = cards.map(c => c.id === id ? { ...c, flipped: true } : c);
+    setCards(next);
+    const newSel = [...selected, id];
+    setSelected(newSel);
+    if (newSel.length === 2) {
+      setMoves(m => m + 1);
+      setLock(true);
+      const [a, b] = newSel.map(sid => next.find(c => c.id === sid));
+      if (a.emoji === b.emoji) {
+        const matched = next.map(c => newSel.includes(c.id) ? { ...c, matched: true } : c);
+        setCards(matched);
+        setScore(s => s + 10);
+        setSelected([]);
+        setLock(false);
+        if (matched.every(c => c.matched)) setWon(true);
+      } else {
+        setAnimId(newSel[1]);
+        setTimeout(() => {
+          setCards(prev => prev.map(c => newSel.includes(c.id) ? { ...c, flipped: false } : c));
+          setSelected([]);
+          setLock(false);
+          setAnimId(null);
+        }, 900);
+      }
+    }
+  };
+
+  const reset = () => { setCards(makeCards()); setSelected([]); setScore(0); setMoves(0); setWon(false); setLock(false); };
+
+  return (
+    <GameShell title="Memory Match" color={palette.accent3} score={score} onBack={onBack}
+      rightSlot={<span style={{ color: palette.muted, fontSize: 12, fontFamily: "'DM Mono',monospace" }}>{moves} moves</span>}>
+      {won ? (
+        <div className="fade-in" style={{ textAlign: "center", marginTop: 60 }}>
+          <div style={{ fontSize: 64 }}>🎉</div>
+          <div style={{ fontSize: 28, fontWeight: 800, marginTop: 12 }}>You Won!</div>
+          <div style={{ color: palette.muted, marginTop: 6 }}>Completed in {moves} moves · Score: {score}</div>
+          <Btn onClick={reset} color={palette.accent3} style={{ marginTop: 24 }}>Play Again</Btn>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, width: "100%", maxWidth: 380 }}>
+            {cards.map(card => (
+              <div key={card.id} className={animId === card.id ? "shake" : ""}
+                onClick={() => flip(card.id)}
+                style={{
+                  aspectRatio: "1", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 28, cursor: card.matched ? "default" : "pointer",
+                  background: card.matched ? "rgba(79,209,197,0.18)" : card.flipped ? "rgba(255,255,255,0.1)" : palette.card,
+                  border: `2px solid ${card.matched ? palette.accent3 : card.flipped ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.06)"}`,
+                  transition: "all 0.2s",
+                  transform: card.flipped || card.matched ? "rotateY(0deg)" : "rotateY(90deg)",
+                  userSelect: "none",
+                }}>
+                {card.flipped || card.matched ? card.emoji : ""}
+              </div>
+            ))}
+          </div>
+          <Btn onClick={reset} color={palette.muted} style={{ marginTop: 20, fontSize: 13, padding: "8px 18px" }}>Restart</Btn>
+        </>
+      )}
+    </GameShell>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// GAME 2 — Quick Math
+// ══════════════════════════════════════════════════════════════
+function makeQuestion(level) {
+  const ops = level < 3 ? ["+", "-"] : ["+", "-", "×"];
+  const op = ops[rand(0, ops.length - 1)];
+  let a, b, ans;
+  if (op === "+") { a = rand(1, 20 + level * 5); b = rand(1, 20 + level * 5); ans = a + b; }
+  else if (op === "-") { a = rand(10, 30 + level * 5); b = rand(1, a); ans = a - b; }
+  else { a = rand(2, 9 + level); b = rand(2, 9); ans = a * b; }
+  const wrongs = new Set();
+  while (wrongs.size < 3) { const w = ans + rand(-5, 5); if (w !== ans && w > 0) wrongs.add(w); }
+  return { question: `${a} ${op} ${b}`, answer: ans, choices: shuffle([ans, ...wrongs]) };
+}
+
+function MathGame({ onBack }) {
+  const [q, setQ] = useState(() => makeQuestion(1));
+  const [score, setScore] = useState(0);
+  const [streak, setStreak] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [feedback, setFeedback] = useState(null);
+  const [shaking, setShaking] = useState(false);
+
+  const answer = (choice) => {
+    if (feedback) return;
+    if (choice === q.answer) {
+      const pts = 10 + streak * 2;
+      setScore(s => s + pts);
+      setStreak(s => s + 1);
+      setFeedback({ correct: true, pts });
+      if ((streak + 1) % 5 === 0) setLevel(l => l + 1);
+      setTimeout(() => { setFeedback(null); setQ(makeQuestion(level)); }, 700);
+    } else {
+      setStreak(0);
+      setFeedback({ correct: false });
+      setShaking(true);
+      setTimeout(() => { setShaking(false); setFeedback(null); setQ(makeQuestion(level)); }, 800);
+    }
+  };
+
+  return (
+    <GameShell title="Quick Math" color={palette.accent2} score={score} onBack={onBack}
+      rightSlot={<span style={{ fontSize: 12, color: streak > 0 ? palette.accent1 : palette.muted, fontFamily: "'DM Mono',monospace" }}>🔥 {streak}</span>}>
+      <div style={{ width: "100%", maxWidth: 420, marginTop: 20 }}>
+        <div style={{ textAlign: "center", marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: palette.muted, fontFamily: "'DM Mono',monospace", letterSpacing: 2 }}>LEVEL {level}</span>
+        </div>
+        <div className={shaking ? "shake" : ""} style={{
+          background: palette.card, borderRadius: 20, padding: "40px 24px", textAlign: "center", marginBottom: 24,
+          border: `2px solid ${feedback ? (feedback.correct ? palette.accent3 : palette.accent2) : "rgba(255,255,255,0.07)"}`,
+          transition: "border-color 0.2s",
+        }}>
+          <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: -2 }}>{q.question} = ?</div>
+          {feedback && (
+            <div style={{ marginTop: 12, fontSize: 20, color: feedback.correct ? palette.accent3 : palette.accent2, fontWeight: 700 }}>
+              {feedback.correct ? `+${feedback.pts} pts! 🎯` : "Nope! Try next →"}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {q.choices.map((c, i) => (
+            <button key={i} onClick={() => answer(c)}
+              style={{
+                padding: "20px", background: "rgba(255,255,255,0.05)", border: "2px solid rgba(255,255,255,0.1)",
+                borderRadius: 14, color: palette.text, fontSize: 24, fontWeight: 700, fontFamily: "'DM Mono',monospace",
+                cursor: "pointer", transition: "all 0.15s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = "rgba(233,79,123,0.18)"}
+              onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+            >{c}</button>
+          ))}
+        </div>
+      </div>
+    </GameShell>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// GAME 3 — Reaction Time
+// ══════════════════════════════════════════════════════════════
+function ReactionGame({ onBack }) {
+  const [phase, setPhase] = useState("idle"); // idle | waiting | ready | result
+  const [score, setScore] = useState(0);
+  const [times, setTimes] = useState([]);
+  const [startTime, setStartTime] = useState(null);
+  const [lastTime, setLastTime] = useState(null);
+  const [round, setRound] = useState(0);
+  const timerRef = useRef(null);
+  const TOTAL = 5;
+
+  const start = () => {
+    setPhase("waiting");
+    const delay = rand(1500, 4000);
+    timerRef.current = setTimeout(() => { setPhase("ready"); setStartTime(Date.now()); }, delay);
+  };
+
+  const tap = () => {
+    if (phase === "waiting") {
+      clearTimeout(timerRef.current);
+      setPhase("idle");
+      return;
+    }
+    if (phase === "ready") {
+      const ms = Date.now() - startTime;
+      setLastTime(ms);
+      setTimes(t => [...t, ms]);
+      const pts = Math.max(0, Math.floor(1000 - ms));
+      setScore(s => s + pts);
+      const next = round + 1;
+      setRound(next);
+      setPhase(next >= TOTAL ? "done" : "idle");
+    }
+  };
+
+  const reset = () => { setPhase("idle"); setScore(0); setTimes([]); setLastTime(null); setRound(0); };
+  const avg = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
+
+  const bgColor = phase === "ready" ? "#1a4a1a" : phase === "waiting" ? "#2a1a1a" : palette.card;
+  const msg = { idle: "Tap START", waiting: "Wait for green...", ready: "TAP NOW!", done: "Done!" }[phase] || "";
+  const msgColor = { ready: palette.accent3, waiting: palette.accent2, done: palette.accent1 }[phase] || palette.text;
+
+  return (
+    <GameShell title="Reaction Time" color={palette.accent5} score={score} onBack={onBack}
+      rightSlot={<span style={{ fontSize: 12, color: palette.muted, fontFamily: "'DM Mono',monospace" }}>{round}/{TOTAL}</span>}>
+      <div style={{ width: "100%", maxWidth: 420, marginTop: 20 }}>
+        <div onClick={phase === "ready" || phase === "waiting" ? tap : undefined}
+          style={{
+            borderRadius: 24, padding: "60px 24px", textAlign: "center", cursor: phase === "ready" || phase === "waiting" ? "pointer" : "default",
+            background: bgColor, border: `3px solid ${phase === "ready" ? palette.accent3 : phase === "waiting" ? palette.accent2 : "rgba(255,255,255,0.08)"}`,
+            transition: "all 0.2s", minHeight: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          }}>
+          <div style={{ fontSize: 36, fontWeight: 800, color: msgColor, transition: "color 0.2s" }}>{msg}</div>
+          {phase === "waiting" && <div style={{ marginTop: 8, color: palette.muted, fontSize: 13 }}>Don't tap yet!</div>}
+          {lastTime && phase === "idle" && round < TOTAL && (
+            <div style={{ marginTop: 12, color: palette.accent1, fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono',monospace" }}>{lastTime}ms ⚡</div>
+          )}
+        </div>
+
+        {phase === "done" ? (
+          <div style={{ textAlign: "center", marginTop: 28 }}>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>Average: <span style={{ color: palette.accent1 }}>{avg}ms</span></div>
+            <div style={{ color: palette.muted, fontSize: 13, marginTop: 4 }}>Total Score: {score}</div>
+            <Btn onClick={reset} color={palette.accent5} style={{ marginTop: 20 }}>Play Again</Btn>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 24 }}>
+            {phase === "idle" && <Btn onClick={start} color={palette.accent5}>START</Btn>}
+          </div>
+        )}
+
+        {times.length > 0 && phase !== "done" && (
+          <div style={{ marginTop: 20, display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+            {times.map((t, i) => (
+              <span key={i} style={{ background: "rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontFamily: "'DM Mono',monospace", color: palette.accent3 }}>{t}ms</span>
+            ))}
+          </div>
+        )}
+      </div>
+    </GameShell>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// GAME 4 — Word Scramble
+// ══════════════════════════════════════════════════════════════
+const WORDS = [
+  { word: "PLANET", hint: "Orbits a star" }, { word: "BRIDGE", hint: "Crosses water" },
+  { word: "FOREST", hint: "Full of trees" }, { word: "CASTLE", hint: "Where kings live" },
+  { word: "GUITAR", hint: "A string instrument" }, { word: "PENCIL", hint: "You write with it" },
+  { word: "MARKET", hint: "Buy and sell here" }, { word: "FROZEN", hint: "Very cold" },
+  { word: "JUNGLE", hint: "Dense tropical forest" }, { word: "ROCKET", hint: "Goes to space" },
+  { word: "CANVAS", hint: "An artist paints on it" }, { word: "MIRROR", hint: "Reflects your image" },
+];
+
+function scramble(word) {
+  let s;
+  do { s = shuffle(word.split("")).join(""); } while (s === word);
+  return s;
+}
+
+function WordGame({ onBack }) {
+  const [idx, setIdx] = useState(() => rand(0, WORDS.length - 1));
+  const [scrambled, setScrambled] = useState(() => scramble(WORDS[rand(0, WORDS.length - 1)].word));
+  const [input, setInput] = useState("");
+  const [score, setScore] = useState(0);
+  const [feedback, setFeedback] = useState(null);
+  const [solved, setSolved] = useState(0);
+  const [hints, setHints] = useState(3);
+  const [showHint, setShowHint] = useState(false);
+
+  const current = WORDS[idx];
+
+  const newWord = useCallback(() => {
+    const ni = rand(0, WORDS.length - 1);
+    setIdx(ni);
+    setScrambled(scramble(WORDS[ni].word));
+    setInput("");
+    setFeedback(null);
+    setShowHint(false);
+  }, []);
+
+  useEffect(() => { setScrambled(scramble(current.word)); }, [idx]);
+
+  const check = () => {
+    if (input.toUpperCase() === current.word) {
+      const pts = 15 + (showHint ? 0 : 5);
+      setScore(s => s + pts);
+      setSolved(s => s + 1);
+      setFeedback({ correct: true, pts });
+      setTimeout(newWord, 900);
+    } else {
+      setFeedback({ correct: false });
+      setTimeout(() => setFeedback(null), 600);
+    }
+  };
+
+  const useHint = () => { if (hints > 0) { setHints(h => h - 1); setShowHint(true); } };
+
+  return (
+    <GameShell title="Word Scramble" color={palette.accent4} score={score} onBack={onBack}
+      rightSlot={<span style={{ fontSize: 12, color: palette.muted, fontFamily: "'DM Mono',monospace" }}>✅ {solved}</span>}>
+      <div style={{ width: "100%", maxWidth: 440, marginTop: 20 }}>
+        <div style={{
+          background: palette.card, borderRadius: 20, padding: "36px 28px", textAlign: "center",
+          border: `2px solid ${feedback ? (feedback.correct ? palette.accent3 : palette.accent2) : "rgba(255,255,255,0.07)"}`,
+          transition: "border-color 0.2s", marginBottom: 20,
+        }}>
+          <div style={{ color: palette.muted, fontSize: 11, letterSpacing: 3, marginBottom: 16 }}>UNSCRAMBLE THIS WORD</div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap", marginBottom: 20 }}>
+            {scrambled.split("").map((l, i) => (
+              <div key={i} style={{
+                width: 44, height: 52, background: "rgba(167,139,250,0.15)", borderRadius: 10,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 24, fontWeight: 800, color: palette.accent4, border: "1.5px solid rgba(167,139,250,0.3)",
+              }}>{l}</div>
+            ))}
+          </div>
+          {showHint && <div style={{ color: palette.accent1, fontSize: 13, marginBottom: 12 }}>💡 Hint: {current.hint}</div>}
+          {feedback && (
+            <div style={{ color: feedback.correct ? palette.accent3 : palette.accent2, fontWeight: 700, fontSize: 18 }}>
+              {feedback.correct ? `🎉 +${feedback.pts} pts!` : "Not quite!"}
+            </div>
+          )}
+        </div>
+
+        <input value={input} onChange={e => setInput(e.target.value.toUpperCase())}
+          onKeyDown={e => e.key === "Enter" && check()}
+          placeholder="Type your answer..."
+          maxLength={current.word.length + 1}
+          style={{
+            width: "100%", padding: "16px 20px", background: "rgba(255,255,255,0.06)", border: "2px solid rgba(255,255,255,0.1)",
+            borderRadius: 14, color: palette.text, fontSize: 20, fontWeight: 700, fontFamily: "'DM Mono',monospace",
+            outline: "no
